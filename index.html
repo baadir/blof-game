@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<title>Blöf - 2 Oyuncu (Canlı)</title>
+<style>
+  body{margin:0;background:#121212;color:#eee;font-family:system-ui, sans-serif;overflow-x:hidden;}
+  header{background:#1e1e1e;padding:8px;display:flex;align-items:center;gap:8px;position:sticky;top:0;z-index:10;}
+  button{background:#333;color:#eee;border:none;padding:6px 12px;border-radius:6px;cursor:pointer;}
+  button:disabled{opacity:.4;cursor:not-allowed;}
+  main{display:flex;width:100vw;height:calc(100vh - 60px);}
+  .player{box-sizing:border-box;width:50vw;padding:10px;display:flex;flex-direction:column;align-items:center;gap:8px;border-left:1px solid #333;}
+  .player:first-child{border-left:none;}
+  .actions{display:flex;gap:4px;flex-wrap:wrap;justify-content:center;}
+  select{background:#1e1e1e;border:1px solid #555;color:#eee;border-radius:4px;padding:4px;}
+  .card{width:80px;height:120px;border-radius:8px;border:2px solid #555;display:flex;align-items:center;justify-content:center;font-size:32px;background:#1e1e1e;}
+  .card.face-down{background:repeating-linear-gradient(45deg,#555,#555 10px,#333 10px,#333 20px);}
+  .card.red{color:#ff5b5b;}
+  .log{background:#1e1e1e;border:1px solid #555;width:100%;height:100px;overflow:auto;font-family:monospace;font-size:12px;padding:4px;}
+  .status{min-height:20px;}
+</style>
+</head>
+<body>
+<header>
+  <button id="newGame">Yeni Oyun Kur</button>
+  <button id="share" disabled>Bağlantıyı Paylaş</button>
+  <span id="room"></span>
+  <span id="score">0 - 0 (10)</span>
+</header>
+<main>
+  <section id="host" class="player">
+    <h2>Kurucu</h2>
+    <div id="hostCard" class="card face-down"></div>
+    <select id="hostClaim"></select>
+    <button id="hostTruth" class="action">Doğruyu Söyle</button>
+    <div class="actions">
+      <button id="hostDraw" class="action">Kart Çek</button>
+      <button id="hostClaimBtn" class="action">Beyan Et</button>
+      <button id="hostReveal" class="action">Açığa Çıkar</button>
+      <button id="hostBelieve" class="action">İnan</button>
+      <button id="hostBluff" class="action">Blöf!</button>
+    </div>
+    <div id="hostStatus" class="status"></div>
+    <pre id="hostLog" class="log"></pre>
+  </section>
+  <section id="guest" class="player">
+    <h2>Konuk</h2>
+    <div id="guestCard" class="card face-down"></div>
+    <select id="guestClaim"></select>
+    <button id="guestTruth" class="action">Doğruyu Söyle</button>
+    <div class="actions">
+      <button id="guestDraw" class="action">Kart Çek</button>
+      <button id="guestClaimBtn" class="action">Beyan Et</button>
+      <button id="guestReveal" class="action">Açığa Çıkar</button>
+      <button id="guestBelieve" class="action">İnan</button>
+      <button id="guestBluff" class="action">Blöf!</button>
+    </div>
+    <div id="guestStatus" class="status"></div>
+    <pre id="guestLog" class="log"></pre>
+  </section>
+</main>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore-compat.js"></script>
+<script>
+// Firebase configuration placeholder
+const firebaseConfig = {
+  // TODO: Kullanıcı buraya Firebase Web App config'ini yapıştıracak
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+const games = db.collection('games');
+
+// Constants
+const ranks = ["2","3","4","5","6","7","8","9","10","J","Q","K","A"];
+const suits = ["♠","♥","♦","♣"];
+
+// UI references
+function fillRanks(sel){ranks.forEach(r=>{const o=document.createElement('option');o.value=r;o.textContent=r;sel.appendChild(o);});}
+fillRanks(document.getElementById('hostClaim'));
+fillRanks(document.getElementById('guestClaim'));
+
+const UIs={
+  host:{
+    card:document.getElementById('hostCard'),
+    claimSelect:document.getElementById('hostClaim'),
+    truthBtn:document.getElementById('hostTruth'),
+    drawBtn:document.getElementById('hostDraw'),
+    claimBtn:document.getElementById('hostClaimBtn'),
+    revealBtn:document.getElementById('hostReveal'),
+    believeBtn:document.getElementById('hostBelieve'),
+    bluffBtn:document.getElementById('hostBluff'),
+    status:document.getElementById('hostStatus')
+  },
+  guest:{
+    card:document.getElementById('guestCard'),
+    claimSelect:document.getElementById('guestClaim'),
+    truthBtn:document.getElementById('guestTruth'),
+    drawBtn:document.getElementById('guestDraw'),
+    claimBtn:document.getElementById('guestClaimBtn'),
+    revealBtn:document.getElementById('guestReveal'),
+    believeBtn:document.getElementById('guestBelieve'),
+    bluffBtn:document.getElementById('guestBluff'),
+    status:document.getElementById('guestStatus')
+  }
+};
+
+// Logs
+function addLog(msg){const t=new Date().toLocaleTimeString();['hostLog','guestLog'].forEach(id=>{const el=document.getElementById(id);el.textContent+=`[${t}] ${msg}\n`;el.scrollTop=el.scrollHeight;});}
+
+// Card rendering
+function setCard(el,card,faceUp){el.className='card';if(!card){el.classList.add('face-down');el.textContent='';return;}if(faceUp){el.textContent=card.rank+card.suit;if(card.suit==='♥'||card.suit==='♦')el.classList.add('red');}else{el.classList.add('face-down');el.textContent='';}}
+
+function setEnableAll(on){document.querySelectorAll('button.action').forEach(b=>b.disabled=!on);}
+function setMyClaimUI(on){myUI.claimSelect.disabled=myUI.truthBtn.disabled=myUI.claimBtn.disabled=!on;}
+function setDecisionUI(on){oppUI.believeBtn.disabled=oppUI.bluffBtn.disabled=!on;}
+function setRevealUI(on){myUI.revealBtn.disabled=!on;}
+
+// SHA-256 helper
+async function sha256Hex(str){const buf=new TextEncoder().encode(str);const hash=await crypto.subtle.digest('SHA-256',buf);return Array.from(new Uint8Array(hash)).map(b=>b.toString(16).padStart(2,'0')).join('');}
+
+// State
+let gameId=null;let gameRef=null;let unsub=null;let role=null;let myUI=null;let oppUI=null;
+let myCard=null;let mySalt=null;let myCommit=null;let uid=localStorage.getItem('uid');if(!uid){uid=Math.random().toString(36).slice(2);localStorage.setItem('uid',uid);} 
+
+// Utility
+function drawLocalCard(){return{rank:ranks[Math.floor(Math.random()*ranks.length)],suit:suits[Math.floor(Math.random()*suits.length)]};}
+
+// Resolve round
+async function resolveRound(ref,game){const scores=Object.assign({},game.scores);const by=game.current.by;const other=by==='host'?'guest':'host';let logMsg='';if(game.current.decision==='believe'){scores[by]+=1;logMsg=`${by} beyanına inanıldı (+1)`;}else{const{rank,suit,salt}=game.current.revealed;const hash=await sha256Hex(`${rank}|${suit}|${salt}`);const hashOk=hash===game.current.commitHash;if(!hashOk)addLog('Commit hash uyuşmadı!');const truthful=hashOk&&rank===game.current.claimRank;if(truthful){scores[by]+=2;scores[other]=Math.max(0,scores[other]-2);logMsg=`${by} doğru söyledi (+2)`;}else{scores[by]=Math.max(0,scores[by]-2);scores[other]+=2;logMsg=`${by} blöf yaptı (-2)`;}}let status=game.status;if(scores.host>=game.target||scores.guest>=game.target){status='ended';logMsg+=` | Kazanan: ${scores.host>=game.target?'host':'guest'}`;}await ref.update({scores,status,turn:other,current:{by:null,commitHash:null,claimRank:null,decision:null,revealed:null,resolvedBy:role}});myCard=null;mySalt=null;myCommit=null;setCard(myUI.card,null,false);addLog(logMsg);}
+
+// Join and snapshot handling
+async function joinGame(id){gameId=id;gameRef=games.doc(id);document.getElementById('room').textContent=`Oda: ${id}`;document.getElementById('share').disabled=false;unsub=gameRef.onSnapshot(async snap=>{const game=snap.data();if(!game)return;await ensureRole(game);updateUI(game);if(role===game.current.by&&!game.current.resolvedBy&&(game.current.decision==='believe'||(game.current.decision==='bluff'&&game.current.revealed))){await resolveRound(gameRef,game);}});}
+
+async function ensureRole(game){if(role)return;if(!game.hostId){await gameRef.update({hostId:uid});role='host';}
+else if(game.hostId===uid){role='host';}
+else if(!game.guestId){await gameRef.update({guestId:uid,status:'playing'});role='guest';}
+else if(game.guestId===uid){role='guest';}
+else{alert('Oda dolu, izleyici modundasın');}
+if(role){myUI=UIs[role];oppUI=UIs[role==='host'?'guest':'host'];attachHandlers();setEnableAll(false);}}
+
+function updateUI(game){document.getElementById('score').textContent=`${game.scores.host} - ${game.scores.guest} (${game.target})`;
+if(game.status==='ended'){const winner=game.scores.host>=game.target?'Kurucu':'Konuk';UIs.host.status.textContent=UIs.guest.status.textContent=`🏁 Oyun bitti — kazanan ${winner}`;setEnableAll(false);return;}UIs.host.status.textContent=game.turn==='host'? 'Sıra sende':'Rakipte sıra';UIs.guest.status.textContent=game.turn==='guest'? 'Sıra sende':'Rakipte sıra';setEnableAll(false);setMyClaimUI(false);setDecisionUI(false);setRevealUI(false);
+if(game.current.by){const ownerUI=UIs[game.current.by];const otherUI=UIs[game.current.by==='host'?'guest':'host'];if(game.current.by===role){setCard(ownerUI.card,myCard,true);}else if(game.current.revealed){setCard(ownerUI.card,game.current.revealed,true);}else{setCard(ownerUI.card,null,false);}setCard(otherUI.card,null,false);}else{setCard(UIs.host.card,null,false);setCard(UIs.guest.card,null,false);}if(game.turn===role){if(!game.current.by){myUI.drawBtn.disabled=false;}else if(game.current.by===role&&game.current.decision==='bluff'&&!game.current.revealed){setRevealUI(true);}}else{if(game.current.by&&game.current.by!==role&&game.current.decision===null){setDecisionUI(true);}}}
+
+function attachHandlers(){myUI.drawBtn.onclick=async()=>{if(myCard)return;myCard=drawLocalCard();mySalt=crypto.getRandomValues(new Uint32Array(3)).join('-');myCommit=await sha256Hex(`${myCard.rank}|${myCard.suit}|${mySalt}`);setCard(myUI.card,myCard,true);setMyClaimUI(true);myUI.drawBtn.disabled=true;};myUI.truthBtn.onclick=()=>{if(myCard)myUI.claimSelect.value=myCard.rank;};myUI.claimBtn.onclick=async()=>{const claimRank=myUI.claimSelect.value;if(!myCard)return;await gameRef.update({current:{by:role,commitHash:myCommit,claimRank,decision:null,revealed:null,resolvedBy:null}});setMyClaimUI(false);};myUI.believeBtn.onclick=async()=>{await gameRef.update({'current.decision':'believe'});};myUI.bluffBtn.onclick=async()=>{await gameRef.update({'current.decision':'bluff'});};myUI.revealBtn.onclick=async()=>{if(!myCard)return;await gameRef.update({'current.revealed':{rank:myCard.rank,suit:myCard.suit,salt:mySalt}});};}
+
+// Top buttons
+const newGameBtn=document.getElementById('newGame');
+newGameBtn.onclick=async()=>{const ref=games.doc();await ref.set({createdAt:firebase.firestore.FieldValue.serverTimestamp(),status:'waiting',hostId:null,guestId:null,turn:'host',scores:{host:0,guest:0},target:10,current:{by:null,commitHash:null,claimRank:null,decision:null,revealed:null,resolvedBy:null}});location.search=`?game=${ref.id}`;};
+
+const shareBtn=document.getElementById('share');
+shareBtn.onclick=async()=>{const url=location.href;try{if(navigator.share){await navigator.share({url});}else{await navigator.clipboard.writeText(url);alert('Link panoya kopyalandı');}}catch(err){alert('Paylaşım hatası: '+err.message);}};
+
+// Start
+const params=new URLSearchParams(location.search);const g=params.get('game');if(g){joinGame(g);}else{addLog('Yeni oyun kurmak için üstteki butonu kullanın');}
+
+</script>
+</body>
+</html>
