@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Blöf Game — Lobby</title>
+  <style>
+    body{margin:0;background:#121212;color:#eee;font-family:system-ui, sans-serif;}
+    header{background:#1e1e1e;padding:10px;font-weight:600;}
+    main{padding:16px;max-width:760px;margin:0 auto;display:grid;gap:16px;}
+    .card{background:#1e1e1e;border:1px solid #333;border-radius:10px;padding:12px;}
+    label{display:block;margin-bottom:6px;font-size:14px;}
+    input{width:100%;padding:8px;border-radius:6px;border:1px solid #444;background:#111;color:#eee;}
+    button{background:#2f2f2f;color:#eee;border:none;padding:8px 12px;border-radius:6px;cursor:pointer;}
+    button:disabled{opacity:.5;cursor:not-allowed;}
+    .row{display:flex;gap:8px;flex-wrap:wrap;}
+    .pill{background:#2a2a2a;border:1px solid #444;border-radius:999px;padding:4px 10px;font-size:12px;}
+    ul{list-style:none;padding:0;margin:0;display:grid;gap:8px;}
+  </style>
+</head>
+<body>
+  <header>Blöf Game — Multiplayer Lobby (MVP altyapı)</header>
+  <main>
+    <section class="card">
+      <div class="row">
+        <div style="flex:1;min-width:200px;">
+          <label>İsmin</label>
+          <input id="name" placeholder="Player" />
+        </div>
+        <div style="flex:1;min-width:200px;">
+          <label>Oda Kodu</label>
+          <input id="room" placeholder="ABCDE" />
+        </div>
+      </div>
+      <div class="row" style="margin-top:10px;">
+        <button id="create">Oda Oluştur</button>
+        <button id="join">Odaya Katıl</button>
+        <button id="leave" disabled>Odadan Çık</button>
+      </div>
+      <div id="status" style="margin-top:10px;font-size:14px;"></div>
+      <div id="roomInfo" style="margin-top:6px;" class="row"></div>
+    </section>
+
+    <section class="card">
+      <h3>Oyuncular</h3>
+      <ul id="players"></ul>
+      <small>Maksimum 5 kişi.</small>
+    </section>
+  </main>
+
+  <script>
+    const statusEl = document.getElementById("status");
+    const playersEl = document.getElementById("players");
+    const roomInfoEl = document.getElementById("roomInfo");
+    const createBtn = document.getElementById("create");
+    const joinBtn = document.getElementById("join");
+    const leaveBtn = document.getElementById("leave");
+    const nameInput = document.getElementById("name");
+    const roomInput = document.getElementById("room");
+
+    const ws = new WebSocket(`${location.origin.replace("http", "ws")}/ws`);
+    let clientId = null;
+    let currentRoom = null;
+
+    function setStatus(msg) {
+      statusEl.textContent = msg;
+    }
+
+    function renderPlayers(players) {
+      playersEl.innerHTML = "";
+      players.forEach((p) => {
+        const li = document.createElement("li");
+        li.textContent = `${p.name}${p.id === clientId ? " (sen)" : ""}`;
+        playersEl.appendChild(li);
+      });
+    }
+
+    function renderRoomInfo(roomId, players, maxPlayers) {
+      roomInfoEl.innerHTML = "";
+      if (!roomId) return;
+      const pill1 = document.createElement("span");
+      pill1.className = "pill";
+      pill1.textContent = `Oda: ${roomId}`;
+      const pill2 = document.createElement("span");
+      pill2.className = "pill";
+      pill2.textContent = `Oyuncu: ${players.length}/${maxPlayers}`;
+      roomInfoEl.appendChild(pill1);
+      roomInfoEl.appendChild(pill2);
+    }
+
+    ws.onopen = () => setStatus("Bağlandı ✅");
+    ws.onclose = () => setStatus("Bağlantı kesildi ❌");
+
+    ws.onmessage = (ev) => {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === "hello") {
+        clientId = msg.clientId;
+      }
+      if (msg.type === "joined") {
+        currentRoom = msg.roomId;
+        leaveBtn.disabled = false;
+        setStatus(`Odaya katıldın: ${msg.roomId}`);
+      }
+      if (msg.type === "room_state") {
+        renderPlayers(msg.players);
+        renderRoomInfo(msg.roomId, msg.players, msg.maxPlayers);
+      }
+      if (msg.type === "error") {
+        setStatus(`Hata: ${msg.message}`);
+      }
+    };
+
+    createBtn.onclick = () => {
+      ws.send(JSON.stringify({ type: "create_room", name: nameInput.value || "Player" }));
+    };
+
+    joinBtn.onclick = () => {
+      const roomId = (roomInput.value || "").toUpperCase().trim();
+      if (!roomId) return setStatus("Oda kodu girin");
+      ws.send(JSON.stringify({ type: "join_room", roomId, name: nameInput.value || "Player" }));
+    };
+
+    leaveBtn.onclick = () => {
+      ws.send(JSON.stringify({ type: "leave_room" }));
+      currentRoom = null;
+      leaveBtn.disabled = true;
+      renderPlayers([]);
+      renderRoomInfo(null, [], 0);
+      setStatus("Odadan çıktın");
+    };
+  </script>
+</body>
+</html>
