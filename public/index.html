@@ -3,23 +3,27 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Blöf Game — Lobby</title>
+  <title>Blöf Game — MVP</title>
   <style>
     body{margin:0;background:#121212;color:#eee;font-family:system-ui, sans-serif;}
     header{background:#1e1e1e;padding:10px;font-weight:600;}
-    main{padding:16px;max-width:760px;margin:0 auto;display:grid;gap:16px;}
+    main{padding:16px;max-width:960px;margin:0 auto;display:grid;gap:16px;}
     .card{background:#1e1e1e;border:1px solid #333;border-radius:10px;padding:12px;}
     label{display:block;margin-bottom:6px;font-size:14px;}
-    input{width:100%;padding:8px;border-radius:6px;border:1px solid #444;background:#111;color:#eee;}
+    input,select{width:100%;padding:8px;border-radius:6px;border:1px solid #444;background:#111;color:#eee;}
     button{background:#2f2f2f;color:#eee;border:none;padding:8px 12px;border-radius:6px;cursor:pointer;}
     button:disabled{opacity:.5;cursor:not-allowed;}
     .row{display:flex;gap:8px;flex-wrap:wrap;}
     .pill{background:#2a2a2a;border:1px solid #444;border-radius:999px;padding:4px 10px;font-size:12px;}
-    ul{list-style:none;padding:0;margin:0;display:grid;gap:8px;}
+    ul{list-style:none;padding:0;margin:0;display:grid;gap:6px;}
+    .hand{display:flex;gap:8px;flex-wrap:wrap;}
+    .hand-card{padding:8px 10px;border:1px solid #444;border-radius:6px;background:#151515;cursor:pointer;user-select:none;}
+    .hand-card.selected{outline:2px solid #5bc0ff;}
+    .muted{opacity:.7;font-size:12px;}
   </style>
 </head>
 <body>
-  <header>Blöf Game — Multiplayer Lobby (MVP altyapı)</header>
+  <header>Blöf Game — Multiplayer MVP</header>
   <main>
     <section class="card">
       <div class="row">
@@ -36,35 +40,78 @@
         <button id="create">Oda Oluştur</button>
         <button id="join">Odaya Katıl</button>
         <button id="leave" disabled>Odadan Çık</button>
+        <button id="start" disabled>Oyunu Başlat</button>
       </div>
       <div id="status" style="margin-top:10px;font-size:14px;"></div>
       <div id="roomInfo" style="margin-top:6px;" class="row"></div>
     </section>
 
     <section class="card">
-      <h3>Oyuncular</h3>
+      <h3>Oyuncular</h3> 
       <ul id="players"></ul>
-      <small>Maksimum 5 kişi.</small>
+      <small class="muted">Maksimum 5 kişi.</small>
+    </section>
+
+    <section class="card">
+      <h3>Oyun Durumu</h3>
+      <div class="row" id="gameState"></div>
+      <div id="lastClaim" class="muted"></div>
+      <div id="winner" style="margin-top:8px;"></div>
+    </section>
+
+    <section class="card">
+      <h3>Elin</h3>
+      <div id="hand" class="hand"></div>
+      <div class="row" style="margin-top:8px;">
+        <div style="min-width:200px;">
+          <label>Beyan</label>
+          <select id="claim"></select>
+        </div>
+        <div style="display:flex;align-items:flex-end;gap:8px;">
+          <button id="play">Beyan Et (1-3 kart)</button>
+          <button id="accept">İnan</button>
+          <button id="challenge">Blöf!</button>
+        </div>
+      </div>
+      <div class="muted" id="hint"></div>
     </section>
   </main>
 
   <script>
+    const RANKS = ["2","3","4","5","6","7","8","9","10","J","Q","K","A"];
     const statusEl = document.getElementById("status");
     const playersEl = document.getElementById("players");
     const roomInfoEl = document.getElementById("roomInfo");
     const createBtn = document.getElementById("create");
     const joinBtn = document.getElementById("join");
     const leaveBtn = document.getElementById("leave");
+    const startBtn = document.getElementById("start");
     const nameInput = document.getElementById("name");
     const roomInput = document.getElementById("room");
+    const handEl = document.getElementById("hand");
+    const claimSel = document.getElementById("claim");
+    const playBtn = document.getElementById("play");
+    const acceptBtn = document.getElementById("accept");
+    const challengeBtn = document.getElementById("challenge");
+    const gameStateEl = document.getElementById("gameState");
+    const lastClaimEl = document.getElementById("lastClaim");
+    const hintEl = document.getElementById("hint");
+    const winnerEl = document.getElementById("winner");
+
+    RANKS.forEach(r => {
+      const o = document.createElement("option");
+      o.value = r; o.textContent = r;
+      claimSel.appendChild(o);
+    });
 
     const ws = new WebSocket(`${location.origin.replace("http", "ws")}/ws`);
     let clientId = null;
     let currentRoom = null;
+    let roomState = null;
+    let hand = [];
+    let selected = new Set();
 
-    function setStatus(msg) {
-      statusEl.textContent = msg;
-    }
+    function setStatus(msg) { statusEl.textContent = msg; }
 
     function renderPlayers(players) {
       playersEl.innerHTML = "";
@@ -88,26 +135,86 @@
       roomInfoEl.appendChild(pill2);
     }
 
+    function renderHand() {
+      handEl.innerHTML = "";
+      hand.forEach((c) => {
+        const div = document.createElement("div");
+        div.className = "hand-card" + (selected.has(c.id) ? " selected" : "");
+        div.textContent = c.rank + c.suit;
+        div.onclick = () => {
+          if (selected.has(c.id)) selected.delete(c.id);
+          else if (selected.size < 3) selected.add(c.id);
+          renderHand();
+        };
+        handEl.appendChild(div);
+      });
+    }
+
+    function renderState() {
+      if (!roomState) return;
+      renderPlayers(roomState.players);
+      renderRoomInfo(roomState.roomId, roomState.players, roomState.maxPlayers);
+      gameStateEl.innerHTML = "";
+      const pills = [
+        `Durum: ${roomState.status}`,
+        `Sıra: ${nameById(roomState.turnPlayerId) || "-"}`,
+        `Pile: ${roomState.pileCount}`
+      ];
+      pills.forEach((t) => { const s = document.createElement("span"); s.className = "pill"; s.textContent = t; gameStateEl.appendChild(s); });
+      lastClaimEl.textContent = roomState.lastClaimRank ? `Son beyan: ${roomState.lastClaimRank}` : "Son beyan: -";
+
+      const isHost = roomState.hostId === clientId;
+      startBtn.disabled = !(isHost && roomState.status === "waiting" && roomState.players.length >= 2);
+
+      if (roomState.winnerId) {
+        winnerEl.textContent = `🏁 Kazanan: ${nameById(roomState.winnerId)}`;
+      } else {
+        winnerEl.textContent = "";
+      }
+
+      const myTurn = roomState.turnPlayerId === clientId;
+      const awaiting = roomState.awaitingChallenge;
+      const iPlayed = roomState.lastPlayBy === clientId;
+
+      playBtn.disabled = !(myTurn && !awaiting && selected.size >= 1);
+      acceptBtn.disabled = !(awaiting && !iPlayed);
+      challengeBtn.disabled = !(awaiting && !iPlayed);
+
+      hintEl.textContent = myTurn ? "Sende sıra — 1-3 kart seçip beyan et." : "Sıra rakipte.";
+      if (awaiting && !iPlayed) hintEl.textContent = "Beyan yapıldı — inanabilir veya blöf diyebilirsin.";
+      if (awaiting && iPlayed) hintEl.textContent = "Beyan yaptın — biri blöf diyebilir.";
+    }
+
+    function nameById(id) {
+      const p = roomState?.players?.find(p => p.id === id);
+      return p ? p.name : id;
+    }
+
     ws.onopen = () => setStatus("Bağlandı ✅");
     ws.onclose = () => setStatus("Bağlantı kesildi ❌");
 
     ws.onmessage = (ev) => {
       const msg = JSON.parse(ev.data);
-      if (msg.type === "hello") {
-        clientId = msg.clientId;
-      }
+      if (msg.type === "hello") clientId = msg.clientId;
       if (msg.type === "joined") {
         currentRoom = msg.roomId;
         leaveBtn.disabled = false;
         setStatus(`Odaya katıldın: ${msg.roomId}`);
       }
       if (msg.type === "room_state") {
-        renderPlayers(msg.players);
-        renderRoomInfo(msg.roomId, msg.players, msg.maxPlayers);
+        roomState = msg;
+        renderState();
       }
-      if (msg.type === "error") {
-        setStatus(`Hata: ${msg.message}`);
+      if (msg.type === "hand") {
+        hand = msg.hand || [];
+        selected.clear();
+        renderHand();
       }
+      if (msg.type === "challenge_result") {
+        const ok = msg.truthful ? "DOĞRU" : "BLÖF";
+        setStatus(`Beyan ${ok}. Kazanan: ${nameById(msg.winnerId)}`);
+      }
+      if (msg.type === "error") setStatus(`Hata: ${msg.message}`);
     };
 
     createBtn.onclick = () => {
@@ -127,6 +234,24 @@
       renderPlayers([]);
       renderRoomInfo(null, [], 0);
       setStatus("Odadan çıktın");
+    };
+
+    startBtn.onclick = () => {
+      ws.send(JSON.stringify({ type: "start_game" }));
+    };
+
+    playBtn.onclick = () => {
+      const cards = Array.from(selected);
+      if (cards.length < 1 || cards.length > 3) return;
+      ws.send(JSON.stringify({ type: "play", cards, claimRank: claimSel.value }));
+    };
+
+    acceptBtn.onclick = () => {
+      ws.send(JSON.stringify({ type: "accept" }));
+    };
+
+    challengeBtn.onclick = () => {
+      ws.send(JSON.stringify({ type: "challenge" }));
     };
   </script>
 </body>
